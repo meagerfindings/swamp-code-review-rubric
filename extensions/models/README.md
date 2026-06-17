@@ -1,8 +1,11 @@
 # @mgreten/code-review-rubric
 
 A generic, philosophy-agnostic code-review engine for swamp. Given a grading
-**rubric** (criteria, grade scale, output contract) and a list of merged pull
+**rubric** (criteria, grade scale, output contract) and a list of pull
 requests, it grades each PR and writes one structured `review` artifact per PR.
+PR state is irrelevant — the engine grades whatever PR numbers you hand it
+(open, merged, or closed); retrospective grading of *merged* PRs is just the
+common consumer pattern.
 The model knows nothing about any particular review philosophy, scoring
 convention, language, or organization — the caller injects the rubric, and the
 engine fans the grading out across the PR list in a single execution. The actual

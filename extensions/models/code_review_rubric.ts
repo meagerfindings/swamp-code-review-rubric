@@ -1,7 +1,12 @@
 /**
- * Generic code-review engine: given a grading rubric and a list of merged PR
- * numbers, produce one graded-review data artifact per PR by delegating the
- * actual LLM call to `@mgreten/cli-agent`'s `invokeAndParse`.
+ * Generic code-review engine: given a grading rubric and a list of PR numbers,
+ * produce one graded-review data artifact per PR by delegating the actual LLM
+ * call to `@mgreten/cli-agent`'s `invokeAndParse`.
+ *
+ * PR state is irrelevant — the engine grades whatever PR numbers it is handed
+ * (open, merged, or closed). The common consumer pattern is retrospective
+ * grading of *merged* PRs to track quality over time (e.g. an OOP-review
+ * tracker), but nothing here requires that.
  *
  * This model knows NOTHING about any particular review philosophy, scoring
  * convention, language, or organization. It is the reusable core: the caller
@@ -471,7 +476,7 @@ function asStringArray(raw: unknown): string[] {
  */
 export const model = {
   type: "@mgreten/code-review-rubric",
-  version: "2026.06.17.1",
+  version: "2026.06.17.2",
   globalArguments: GlobalArgsSchema,
   resources: {
     review: {
