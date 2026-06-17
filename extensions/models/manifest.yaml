@@ -1,0 +1,23 @@
+manifestVersion: 1
+name: "@mgreten/code-review-rubric"
+version: "2026.06.17.1"
+description: >
+  Generic code-review engine: grade a list of merged PRs against a
+  caller-injected rubric, delegating the LLM call to @mgreten/cli-agent and
+  writing one structured graded-review artifact per PR. The engine is
+  philosophy-agnostic — the consumer supplies the criteria, scale, and output
+  contract.
+
+repository: https://github.com/meagerfindings/swamp-code-review-rubric
+
+dependencies:
+  - "@mgreten/cli-agent"
+
+models:
+  - code_review_rubric.ts
+
+additionalFiles:
+  - README.md
+  - LICENSE.txt
+
+platforms: []
