@@ -476,7 +476,7 @@ function asStringArray(raw: unknown): string[] {
  */
 export const model = {
   type: "@mgreten/code-review-rubric",
-  version: "2026.06.17.2",
+  version: "2026.06.27.1",
   globalArguments: GlobalArgsSchema,
   resources: {
     review: {
