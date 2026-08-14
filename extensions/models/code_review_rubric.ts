@@ -275,12 +275,35 @@ async function fetchPrDiff(
     );
   }
   // --paginate yields multiple JSON arrays back-to-back; defensively split.
+  // A diff `patch` field routinely contains literal `[`/`]` characters (array
+  // literals, regex character classes, route `only: [:show]` syntax, …), so
+  // the scanner MUST track JSON string context and skip brackets inside a
+  // quoted string (and skip escaped characters, so `\"` doesn't end the
+  // string early) — a naive bracket count miscounts those as real array
+  // delimiters, slices at the wrong boundary, and JSON.parse then fails with
+  // "Unterminated string in JSON".
   const rawText = res.stdout.trim();
   const chunks: unknown[] = [];
   let depth = 0;
   let start = -1;
+  let inString = false;
+  let escaped = false;
   for (let i = 0; i < rawText.length; i++) {
     const ch = rawText[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
     if (ch === "[") {
       if (depth === 0) start = i;
       depth++;
@@ -655,7 +678,7 @@ function asStringArray(raw: unknown): string[] {
  */
 export const model = {
   type: "@mgreten/code-review-rubric",
-  version: "2026.08.14.1",
+  version: "2026.08.14.2",
   globalArguments: GlobalArgsSchema,
   resources: {
     review: {

@@ -269,6 +269,77 @@ Deno.test("reviewPrs failure path writes an error artifact when diff fetch fails
   assertEquals(err.startsWith("diff fetch failed:"), true);
 });
 
+Deno.test("reviewPrs parses a diff whose patch contains literal [ and ] characters", async () => {
+  // A `patch` string containing array literals / regex character classes /
+  // route-only lists (e.g. `only: [:show]`) previously broke the naive
+  // bracket-depth scanner in fetchPrDiff: brackets INSIDE a JSON string were
+  // miscounted as real array delimiters, slicing the --paginate output at the
+  // wrong boundary and making JSON.parse throw "Unterminated string in JSON".
+  const patchWithBrackets =
+    "@@ -1,3 +1,4 @@\n+ resources :foo, only: [:show, :index]\n" +
+    '+ VALID = ["a", "b[c]", "d\\"]e"]\n+ regex = /[a-z]\\]/';
+  const ghBracketStub: CmdStub = {
+    match: (args) => args[0] === "gh" && args.includes("api"),
+    stdout: JSON.stringify([
+      {
+        filename: "config/routes.rb",
+        status: "modified",
+        additions: 3,
+        deletions: 0,
+        patch: patchWithBrackets,
+      },
+    ]),
+    code: 0,
+  };
+  const agentEnvelope = JSON.stringify({
+    dataArtifacts: [{
+      attributes: {
+        parsedResponse: {
+          grade: "A-",
+          criteria: { srp: "A-", naming: "A" },
+          key_finding: "ok",
+          approvals: [],
+          flags: [],
+          files_reviewed: 1,
+        },
+        durationMs: 100,
+        costUsd: null,
+        provider: "claude",
+        model: "claude-opus-4-7",
+      },
+    }],
+  });
+  const swampStub: CmdStub = {
+    match: (args) => args[0] === "swamp" && args.includes("invokeAndParse"),
+    stdout: agentEnvelope,
+    code: 0,
+  };
+
+  const { context, written } = makeContext(GLOBAL_ARGS);
+  await withMockedCommand([ghBracketStub, swampStub], async () => {
+    const res = await model.methods.reviewPrs.execute(
+      {
+        prs: [{
+          number: 555,
+          title: "routes",
+          author: "alice",
+          mergedAt: "2026-06-17",
+          linesChanged: 4,
+        }],
+        rubric: RUBRIC,
+      },
+      // deno-lint-ignore no-explicit-any
+      context as any,
+    );
+    assertEquals(res.dataHandles.length, 1);
+  });
+
+  assertEquals(written.length, 1);
+  // Grade must be the real "A-", not "N/A" from a diff-fetch parse failure.
+  assertEquals(written[0].data.grade, "A-");
+  assertEquals(written[0].data.error, null);
+});
+
 Deno.test("reviewPrs isolates a per-PR write failure: the rest of the batch still gets graded", async () => {
   const agentEnvelope = JSON.stringify({
     dataArtifacts: [{
