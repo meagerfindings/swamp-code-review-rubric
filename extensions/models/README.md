@@ -1,19 +1,19 @@
 # @mgreten/code-review-rubric
 
 A generic, philosophy-agnostic code-review engine for swamp. Given a grading
-**rubric** (criteria, grade scale, output contract) and a list of pull
-requests, it grades each PR and writes one structured `review` artifact per PR.
-PR state is irrelevant — the engine grades whatever PR numbers you hand it
-(open, merged, or closed); retrospective grading of *merged* PRs is just the
-common consumer pattern.
-The model knows nothing about any particular review philosophy, scoring
+**rubric** (criteria, grade scale, output contract) and a list of pull requests,
+it grades each PR and writes one structured `review` artifact per PR. PR state
+is irrelevant — the engine grades whatever PR numbers you hand it (open, merged,
+or closed); retrospective grading of _merged_ PRs is just the common consumer
+pattern. The model knows nothing about any particular review philosophy, scoring
 convention, language, or organization — the caller injects the rubric, and the
 engine fans the grading out across the PR list in a single execution. The actual
-LLM call is delegated to [`@mgreten/cli-agent`](https://github.com/meagerfindings/swamp-cli-agent),
-so the same review can run against any provider/model that `cli-agent` supports.
+LLM call is delegated to
+[`@mgreten/cli-agent`](https://github.com/meagerfindings/swamp-cli-agent), so
+the same review can run against any provider/model that `cli-agent` supports.
 
 This is the reusable core. Opinionated rubrics (e.g. a Sandi Metz / POODR
-ruleset), discovery defaults, and cross-PR analytics belong in a *consumer*
+ruleset), discovery defaults, and cross-PR analytics belong in a _consumer_
 model that composes this one and passes its own `rubric`.
 
 ## Installation
@@ -25,9 +25,8 @@ swamp extension pull @mgreten/cli-agent
 
 ## Setup
 
-Create an instance, pinning the model so grades stay comparable across runs.
-You also need a reachable `@mgreten/cli-agent` instance (default name
-`cli-agent`).
+Create an instance, pinning the model so grades stay comparable across runs. You
+also need a reachable `@mgreten/cli-agent` instance (default name `cli-agent`).
 
 ```bash
 swamp model create @mgreten/code-review-rubric code-review-rubric
@@ -36,10 +35,10 @@ swamp model edit code-review-rubric   # fill globalArguments below
 
 ```yaml
 # globalArguments
-repoSlug: "owner/name"          # GitHub repo to read PR diffs from
+repoSlug: "owner/name" # GitHub repo to read PR diffs from
 plannerModel: "claude-opus-4-7" # REQUIRED — pin it
 plannerProvider: "claude"
-cliAgentModel: "cli-agent"      # name of your @mgreten/cli-agent instance
+cliAgentModel: "cli-agent" # name of your @mgreten/cli-agent instance
 ```
 
 ## Usage
@@ -56,14 +55,27 @@ swamp model method run code-review-rubric reviewPrs --input-file review.json
 ```json
 {
   "prs": [
-    { "number": 1234, "title": "Add invoicing", "author": "alice", "linesChanged": 180 }
+    {
+      "number": 1234,
+      "title": "Add invoicing",
+      "author": "alice",
+      "linesChanged": 180
+    }
   ],
   "rubric": {
     "name": "Example rubric",
     "promptPreamble": "You are a code reviewer. Grade this merged PR's diff.",
     "criteria": [
-      { "key": "srp", "label": "Single Responsibility", "guidance": "One reason to change?" },
-      { "key": "naming", "label": "Naming", "guidance": "Intention-revealing names?" }
+      {
+        "key": "srp",
+        "label": "Single Responsibility",
+        "guidance": "One reason to change?"
+      },
+      {
+        "key": "naming",
+        "label": "Naming",
+        "guidance": "Intention-revealing names?"
+      }
     ],
     "outputContract": "Return ONLY JSON: {\"grade\":\"B+\",\"criteria\":{\"srp\":\"A-\",\"naming\":\"B\"},\"key_finding\":\"...\",\"approvals\":[\"...\"],\"flags\":[\"...\"],\"files_reviewed\":3}"
   }
@@ -72,25 +84,44 @@ swamp model method run code-review-rubric reviewPrs --input-file review.json
 
 ## Global Arguments
 
-| Argument           | Type     | Default     | Purpose |
-|--------------------|----------|-------------|---------|
-| `repoSlug`         | string   | _(required)_ | GitHub `owner/name` to read PR diffs from. |
-| `plannerModel`     | string   | _(required)_ | `cli-agent` model id. Pin it so grades stay comparable. |
-| `plannerProvider`  | string   | `claude`    | `cli-agent` provider override. |
-| `cliAgentModel`    | string   | `cli-agent` | Name of the `@mgreten/cli-agent` instance to invoke. |
-| `plannerTimeoutMs` | number   | `300000`    | Wall-clock timeout for one review invocation, in ms. |
-| `maxDiffBytes`     | number   | `40000`     | Cap on the PR diff bytes fed to the LLM per PR. |
-| `swampRepoDir`     | string   | `.`         | Working dir for nested swamp CLI calls (resolves the `cli-agent` instance). |
+| Argument               | Type    | Default            | Purpose                                                                              |
+| ---------------------- | ------- | ------------------ | ------------------------------------------------------------------------------------ |
+| `repoSlug`             | string  | _(required)_       | GitHub `owner/name` to read PR diffs from.                                           |
+| `plannerModel`         | string  | _(required)_       | `cli-agent` model id. Pin it so grades stay comparable.                              |
+| `plannerProvider`      | string  | `claude`           | `cli-agent` provider override.                                                       |
+| `cliAgentModel`        | string  | `cli-agent`        | Name of the `@mgreten/cli-agent` instance to invoke.                                 |
+| `providerCatalogModel` | string  | `provider-catalog` | `@mgreten/agent-provider-catalog` instance holding the fleet's provider/model table. |
+| `useProviderCatalog`   | boolean | `false`            | Opt in to reading `{provider, model}` from the catalog instead of the pinned values. |
+| `catalogRole`          | string  | `rubric`           | Role name handed to the catalog's `resolveAgentDispatch` (folded via its roleMap).   |
+| `plannerTimeoutMs`     | number  | `300000`           | Wall-clock timeout for one review invocation, in ms.                                 |
+| `maxDiffBytes`         | number  | `40000`            | Cap on the PR diff bytes fed to the LLM per PR.                                      |
+| `swampRepoDir`         | string  | `.`                | Working dir for nested swamp CLI calls (resolves the `cli-agent` instance).          |
+
+### Provider catalog (opt-in)
+
+Sibling `cli-agent` consumers read `{provider, model}` from a shared
+`@mgreten/agent-provider-catalog` instance so a fleet-wide provider migration is
+one catalog edit rather than a per-consumer sweep. This model supports the same
+read but **defaults it OFF** — `plannerModel` is pinned precisely so grades stay
+comparable across runs, and a catalog that moved the grading model mid-tracker
+would silently re-baseline a grade series.
+
+Set `useProviderCatalog: true` only when a re-baseline is acceptable. When
+enabled, `reviewPrs` resolves the `catalogRole` per PR (work item `pr-<number>`)
+and the resolved values are recorded on each review's `invocation` field. The
+read is **fail-open**: a missing, unreachable, or malformed catalog falls back
+to the pinned `plannerProvider` / `plannerModel` rather than taking a grading
+run down.
 
 ## Method: reviewPrs
 
 Fan-out: grades each PR in `prs` against `rubric` and writes one `review`
 artifact per PR in a single execution (the per-model lock is acquired once).
 
-| Argument | Type | Purpose |
-|----------|------|---------|
-| `prs`    | array | PR metadata: `{ number, title?, author?, mergedAt?, linesChanged? }`. |
-| `rubric` | object | `{ name, promptPreamble, criteria[], gradeScale?, outputContract }`. |
+| Argument | Type   | Purpose                                                               |
+| -------- | ------ | --------------------------------------------------------------------- |
+| `prs`    | array  | PR metadata: `{ number, title?, author?, mergedAt?, linesChanged? }`. |
+| `rubric` | object | `{ name, promptPreamble, criteria[], gradeScale?, outputContract }`.  |
 
 Each `review` artifact carries: `grade`, a `criteria` record (your keys →
 grade), `keyFinding`, `approvals[]`, `flags[]`, `filesReviewed`,
@@ -105,9 +136,10 @@ but grades outside the default letter set persist as `"N/A"`.)
 
 ## How It Works
 
-For each PR, the engine fetches a file-by-file diff via `gh api
-repos/<slug>/pulls/<n>/files`, builds a prompt from the injected rubric, and
-calls `@mgreten/cli-agent`'s `invokeAndParse` (with a short retry loop on
+For each PR, the engine fetches a file-by-file diff via
+`gh api
+repos/<slug>/pulls/<n>/files`, builds a prompt from the injected rubric,
+and calls `@mgreten/cli-agent`'s `invokeAndParse` (with a short retry loop on
 transient datastore-lock contention). The agent's JSON response is validated
 against the rubric's declared criteria keys and written as a `review` artifact.
 

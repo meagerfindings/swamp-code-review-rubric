@@ -14,7 +14,11 @@
  */
 
 import { assertEquals } from "jsr:@std/assert@1";
-import { model } from "./code_review_rubric.ts";
+import {
+  extractDispatch,
+  model,
+  resolveDispatch,
+} from "./code_review_rubric.ts";
 
 type WrittenResource = {
   specName: string;
@@ -263,6 +267,393 @@ Deno.test("reviewPrs failure path writes an error artifact when diff fetch fails
   const err = written[0].data.error as string;
   assertEquals(typeof err, "string");
   assertEquals(err.startsWith("diff fetch failed:"), true);
+});
+
+Deno.test("reviewPrs isolates a per-PR write failure: the rest of the batch still gets graded", async () => {
+  const agentEnvelope = JSON.stringify({
+    dataArtifacts: [{
+      attributes: {
+        parsedResponse: {
+          grade: "A",
+          criteria: { srp: "A", naming: "A" },
+          key_finding: "ok",
+          approvals: [],
+          flags: [],
+          files_reviewed: 1,
+        },
+        durationMs: 100,
+        costUsd: null,
+        provider: "claude",
+        model: "claude-opus-4-7",
+      },
+    }],
+  });
+  const swampStub: CmdStub = {
+    match: (args) => args[0] === "swamp" && args.includes("invokeAndParse"),
+    stdout: agentEnvelope,
+    code: 0,
+  };
+
+  const written: WrittenResource[] = [];
+  const noop = (_msg: string, _props?: Record<string, unknown>) => {};
+  let calls = 0;
+  const context = {
+    globalArgs: GLOBAL_ARGS,
+    logger: { info: noop, warning: noop, error: noop },
+    writeResource: (
+      specName: string,
+      instanceName: string,
+      data: Record<string, unknown>,
+    ) => {
+      calls++;
+      // Simulate a write failure for the first PR only (e.g. a transient
+      // datastore error) — the second PR's grading must not be skipped.
+      if (calls === 1) {
+        throw new Error("simulated datastore write failure");
+      }
+      written.push({ specName, instanceName, data });
+      return Promise.resolve({ name: instanceName });
+    },
+  };
+
+  await withMockedCommand([ghFilesStub, swampStub], async () => {
+    const res = await model.methods.reviewPrs.execute(
+      {
+        prs: [
+          { number: 1, title: "one", author: "a", mergedAt: null, linesChanged: 3 },
+          { number: 2, title: "two", author: "b", mergedAt: null, linesChanged: 4 },
+        ],
+        rubric: RUBRIC,
+      },
+      // deno-lint-ignore no-explicit-any
+      context as any,
+    );
+    // PR 1's success-path write throws once, caught, then the error-path
+    // write for PR 1 succeeds; PR 2's success-path write also succeeds.
+    assertEquals(res.dataHandles.length, 2);
+  });
+  assertEquals(written.length, 2);
+  const byPr = new Map(written.map((w) => [w.instanceName, w.data]));
+  assertEquals(byPr.get("review-1")?.grade, "N/A");
+  assertEquals(
+    (byPr.get("review-1")?.error as string).includes(
+      "simulated datastore write failure",
+    ),
+    true,
+  );
+  assertEquals(byPr.get("review-2")?.grade, "A");
+});
+
+// --- Provider catalog read --------------------------------------------------
+//
+// This model defaults the catalog OFF (`useProviderCatalog: false`) because
+// `plannerModel` is pinned so grades stay comparable across runs. These cover
+// the opt-in read, the default-off behavior, and every fail-open path — a broken
+// catalog must never take a grading run down.
+
+/** Global args with the catalog opted IN, as an instance would parse them. */
+function catalogGlobalArgs(overrides: Record<string, unknown> = {}) {
+  return model.globalArguments.parse({
+    ...GLOBAL_ARGS,
+    useProviderCatalog: true,
+    ...overrides,
+  });
+}
+
+/**
+ * A fake MethodContext exposing only `runModel`, recording each call so a test
+ * can assert the catalog was (or was NOT) consulted.
+ */
+function makeRunModelContext(
+  impl: (options: { definition: string; method: string }) => unknown,
+): {
+  context: unknown;
+  calls: Array<{ definition: string; method: string; arguments?: unknown }>;
+} {
+  const calls: Array<
+    { definition: string; method: string; arguments?: unknown }
+  > = [];
+  const context = {
+    runModel: (
+      options: { definition: string; method: string; arguments?: unknown },
+    ) => {
+      calls.push(options);
+      return Promise.resolve(impl(options));
+    },
+  };
+  return { context, calls };
+}
+
+Deno.test("extractDispatch reads provider/model out of a dispatch payload", () => {
+  // The parsing contract, tested directly on the function that owns it. Going
+  // through resolveDispatch for this would require faking a runModel shape the
+  // real runtime never produces (see the next test).
+  assertEquals(
+    extractDispatch([{
+      name: "agent-dispatch-pr-1234-rubric-1",
+      attributes: { provider: "codex", model: "gpt-5-codex", tier: 0 },
+    }]),
+    { provider: "codex", model: "gpt-5-codex" },
+  );
+});
+
+Deno.test("resolveDispatch does not trust runModel's payload for the values", async () => {
+  // REGRESSION GUARD. runModel resolves to {ok, resources:[{specName, name}]} —
+  // resource NAMES ONLY, never `attributes`. An earlier version read
+  // extractDispatch(run.resources) and RETURNED it, so the in-process path
+  // always yielded null and the catalog silently never applied. The fix is to
+  // treat an empty in-process read as "fall through to the shellout", not as a
+  // final answer.
+  //
+  // This asserts the realistic shape produces no premature null-return: with
+  // runModel returning name-only resources, resolveDispatch must NOT resolve to
+  // a value derived from them. (It proceeds to the shellout, which in a unit
+  // test has no catalog to reach and so fails open to null.)
+  const { context, calls } = makeRunModelContext(() => ({
+    ok: true,
+    resources: [
+      { specName: "agentDispatch", name: "agent-dispatch-pr-1234-rubric-1" },
+    ],
+  }));
+  const dispatch = await resolveDispatch(
+    catalogGlobalArgs(),
+    // deno-lint-ignore no-explicit-any
+    context as any,
+    "pr-1234",
+    "rubric",
+  );
+  // Not a value invented from the name-only payload.
+  assertEquals(dispatch, null);
+  // And it did ask the catalog, with the right role.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].definition, "provider-catalog");
+  assertEquals(calls[0].method, "resolveAgentDispatch");
+  assertEquals((calls[0].arguments as Record<string, unknown>).role, "rubric");
+});
+
+Deno.test("extractDispatch scans past non-dispatch entries instead of indexing [0]", () => {
+  assertEquals(
+    extractDispatch([
+      { name: "catalog-audit", attributes: { note: "audited" } },
+      { name: "no-attributes" },
+      {
+        name: "agent-dispatch-pr-1234-rubric-1",
+        attributes: { provider: "codex", model: "gpt-5-codex" },
+      },
+    ]),
+    { provider: "codex", model: "gpt-5-codex" },
+  );
+});
+
+Deno.test("resolveDispatch fails open (null) when runModel throws", async () => {
+  const { context } = makeRunModelContext(() => {
+    throw new Error("provider-catalog not found");
+  });
+  assertEquals(
+    await resolveDispatch(
+      catalogGlobalArgs(),
+      // deno-lint-ignore no-explicit-any
+      context as any,
+      "pr-1234",
+      "rubric",
+    ),
+    null,
+  );
+});
+
+Deno.test("resolveDispatch fails open (null) on an ok:false catalog result", async () => {
+  const { context } = makeRunModelContext(() => ({
+    ok: false,
+    error: { message: 'unknown role "rubric"' },
+  }));
+  assertEquals(
+    await resolveDispatch(
+      catalogGlobalArgs(),
+      // deno-lint-ignore no-explicit-any
+      context as any,
+      "pr-1234",
+      "rubric",
+    ),
+    null,
+  );
+});
+
+Deno.test("extractDispatch rejects a payload missing model", () => {
+  assertEquals(
+    extractDispatch([{
+      name: "agent-dispatch",
+      attributes: { provider: "codex" },
+    }]),
+    null,
+  );
+});
+
+Deno.test("resolveDispatch does not consult the catalog when useProviderCatalog is false", async () => {
+  const ga = catalogGlobalArgs({ useProviderCatalog: false });
+  const { context, calls } = makeRunModelContext(() => ({
+    ok: true,
+    resources: [{ attributes: { provider: "codex", model: "gpt-5-codex" } }],
+  }));
+  assertEquals(
+    // deno-lint-ignore no-explicit-any
+    await resolveDispatch(ga, context as any, "pr-1234", "rubric"),
+    null,
+  );
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("extractDispatch ignores non-array and empty payloads", () => {
+  assertEquals(extractDispatch(undefined), null);
+  assertEquals(extractDispatch(null), null);
+  assertEquals(extractDispatch({}), null);
+  assertEquals(extractDispatch([]), null);
+});
+
+Deno.test("global args default the catalog OFF so pinned grades stay comparable", () => {
+  const parsed = model.globalArguments.parse({
+    repoSlug: "owner/name",
+    plannerModel: "claude-opus-4-7",
+  });
+  assertEquals(parsed.useProviderCatalog, false);
+  assertEquals(parsed.providerCatalogModel, "provider-catalog");
+  assertEquals(parsed.catalogRole, "rubric");
+  // The pinned values stay intact as the fail-open fallback.
+  assertEquals(parsed.plannerProvider, "claude");
+  assertEquals(parsed.plannerModel, "claude-opus-4-7");
+});
+
+Deno.test("reviewPrs records the catalog's provider/model on the review when opted in", async () => {
+  // The cli-agent envelope omits provider/model, so the stored invocation
+  // reflects exactly what the engine decided to invoke with.
+  const swampStub: CmdStub = {
+    match: (args) => args[0] === "swamp" && args.includes("invokeAndParse"),
+    stdout: JSON.stringify({
+      dataArtifacts: [{
+        attributes: {
+          parsedResponse: {
+            grade: "A",
+            criteria: { srp: "A", naming: "A" },
+            key_finding: "ok",
+            approvals: [],
+            flags: [],
+            files_reviewed: 1,
+          },
+          durationMs: 10,
+          costUsd: null,
+        },
+      }],
+    }),
+    code: 0,
+  };
+
+  // The catalog is reached over the SHELLOUT, because that is the only
+  // transport that returns attributes — runModel yields resource names only.
+  // Stubbing it here (rather than faking a runModel payload with `attributes`)
+  // is what makes this test exercise the path production actually takes.
+  const catalogStub: CmdStub = {
+    match: (args) =>
+      args[0] === "swamp" && args.includes("resolveAgentDispatch"),
+    stdout: JSON.stringify({
+      dataArtifacts: [{
+        attributes: {
+          workItem: "pr-5",
+          role: "rubric",
+          catalogRole: "reviewer",
+          tier: 0,
+          provider: "codex",
+          model: "gpt-5-codex",
+          disposition: "initial",
+        },
+      }],
+    }),
+    code: 0,
+  };
+
+  // No runModel on the context: forces the shellout transport.
+  const { context, written } = makeContext(catalogGlobalArgs());
+
+  await withMockedCommand([ghFilesStub, catalogStub, swampStub], async () => {
+    await model.methods.reviewPrs.execute(
+      {
+        prs: [{
+          number: 5,
+          title: "x",
+          author: "a",
+          mergedAt: null,
+          linesChanged: 1,
+        }],
+        rubric: RUBRIC,
+      },
+      // deno-lint-ignore no-explicit-any
+      context as any,
+    );
+  });
+
+  assertEquals(written.length, 1);
+  assertEquals(written[0].data.invocation, {
+    provider: "codex",
+    model: "gpt-5-codex",
+    durationMs: 10,
+    costUsd: null,
+  });
+});
+
+Deno.test("reviewPrs keeps the pinned provider/model when the catalog fails", async () => {
+  const swampStub: CmdStub = {
+    match: (args) => args[0] === "swamp" && args.includes("invokeAndParse"),
+    stdout: JSON.stringify({
+      dataArtifacts: [{
+        attributes: {
+          parsedResponse: {
+            grade: "A",
+            criteria: { srp: "A", naming: "A" },
+            key_finding: "ok",
+            approvals: [],
+            flags: [],
+            files_reviewed: 1,
+          },
+          durationMs: 10,
+          costUsd: null,
+        },
+      }],
+    }),
+    code: 0,
+  };
+
+  const { context: base, written } = makeContext(catalogGlobalArgs());
+  const context = {
+    ...(base as Record<string, unknown>),
+    runModel: () => {
+      throw new Error("provider-catalog unreachable");
+    },
+  };
+
+  await withMockedCommand([ghFilesStub, swampStub], async () => {
+    await model.methods.reviewPrs.execute(
+      {
+        prs: [{
+          number: 6,
+          title: "x",
+          author: "a",
+          mergedAt: null,
+          linesChanged: 1,
+        }],
+        rubric: RUBRIC,
+      },
+      // deno-lint-ignore no-explicit-any
+      context as any,
+    );
+  });
+
+  assertEquals(written.length, 1);
+  assertEquals(
+    (written[0].data.invocation as Record<string, unknown>).provider,
+    "claude",
+  );
+  assertEquals(
+    (written[0].data.invocation as Record<string, unknown>).model,
+    "claude-opus-4-7",
+  );
 });
 
 Deno.test("reviewPrs fans out: writes one artifact per PR in a single execution", async () => {

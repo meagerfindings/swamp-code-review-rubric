@@ -1,6 +1,6 @@
 manifestVersion: 1
 name: "@mgreten/code-review-rubric"
-version: "2026.07.16.1"
+version: "2026.08.14.1"
 description: >
   Generic code-review engine: grade a list of PRs against a caller-injected
   rubric, delegating the LLM call to @mgreten/cli-agent and writing one
@@ -13,6 +13,7 @@ repository: https://github.com/meagerfindings/swamp-code-review-rubric
 
 dependencies:
   - "@mgreten/cli-agent"
+  - "@mgreten/agent-provider-catalog"
 
 models:
   - code_review_rubric.ts
