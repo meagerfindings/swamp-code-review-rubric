@@ -537,7 +537,9 @@ async function invokeAgent(
   await Deno.writeTextFile(
     inputFile,
     JSON.stringify({
-      prompt,
+      // The child Swamp run evaluates method inputs; diff text is literal,
+      // not authored CEL. Reconstruct openers in that single evaluation pass.
+      prompt: prompt.replaceAll("${{", "${{ literal('${{') }}"),
       provider,
       model: modelId,
       wallTimeoutMs: ga.plannerTimeoutMs,

@@ -13,7 +13,7 @@
  * @module
  */
 
-import { assertEquals } from "jsr:@std/assert@1";
+import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   extractDispatch,
   model,
@@ -145,13 +145,30 @@ Deno.test("reviewPrs success path grades a PR and writes a review artifact", asy
     }],
   });
   const swampStub: CmdStub = {
-    match: (args) => args[0] === "swamp" && args.includes("invokeAndParse"),
+    match: (args) => {
+      if (args[0] !== "swamp" || !args.includes("invokeAndParse")) return false;
+      const inputFile = args[args.indexOf("--input-file") + 1];
+      const { prompt } = JSON.parse(Deno.readTextFileSync(inputFile));
+      assertStringIncludes(prompt, "${{ literal('${{') }} env.PLAYWRIGHT_BASE_URL }}");
+      assertStringIncludes(prompt, "${{ literal('${{') }} secrets.TEST_TOKEN }}");
+      return true;
+    },
     stdout: agentEnvelope,
     code: 0,
   };
 
   const { context, written } = makeContext(GLOBAL_ARGS);
-  await withMockedCommand([ghFilesStub, swampStub], async () => {
+  const filesWithExpressions: CmdStub = {
+    ...ghFilesStub,
+    stdout: JSON.stringify([{
+      filename: ".github/workflows/e2e.yml",
+      status: "modified",
+      additions: 2,
+      deletions: 0,
+      patch: "+base: ${{ env.PLAYWRIGHT_BASE_URL }}\n+token: ${{ secrets.TEST_TOKEN }}",
+    }]),
+  };
+  await withMockedCommand([filesWithExpressions, swampStub], async () => {
     const res = await model.methods.reviewPrs.execute(
       {
         prs: [{
