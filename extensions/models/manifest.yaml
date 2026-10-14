@@ -1,6 +1,7 @@
 manifestVersion: 1
 name: "@mgreten/code-review-rubric"
-version: "2026.08.14.2"
+version: "2026.10.14.1"
+license: MIT
 description: >
   Generic code-review engine: grade a list of PRs against a caller-injected
   rubric, delegating the LLM call to @mgreten/cli-agent and writing one
