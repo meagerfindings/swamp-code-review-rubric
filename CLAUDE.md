@@ -1,5 +1,5 @@
 <!-- BEGIN swamp managed section - DO NOT EDIT -->
-# Project
+# Swamp
 
 This repository is managed with [swamp](https://github.com/swamp-club/swamp).
 
